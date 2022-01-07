@@ -1,0 +1,173 @@
+---
+title: 'Lab 1: Review/Basic Map Making'
+author: "Sachiko Lamen"
+date: "1/6/2022"
+output: html_document
+---
+
+```{r setup, include=TRUE, warning = FALSE, message = FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+library(tidyverse)
+library(here)
+library(sf)
+library(tmap)
+```
+
+cmd-shift-enter: shortcut for running the current code chunk
+
+### Read in the data
+cmd-option-i: shortcut for creating a code chunk
+
+```{r}
+sf_trees <- read_csv(here("data", "sf_trees", "sf_trees.csv"),
+                     show_col_types = FALSE) # hides information about column types that usually pops up under code chunk 
+
+# In console:
+# view(sf_trees) to view dataset
+# names(sf_trees) will give names of each column
+# summary(sf_trees) gives summary of min, max, mean, etc of each column <- quick rundown of values
+```
+
+### Part 1: Wrangling and ggplot review
+
+**Example 1:** Find counts of observations by 'legal_status' & wrangle a bit.
+
+```{r}
+### Method 1: group_by %>% summarize()
+sf_trees %>%
+  group_by(legal_status) %>%
+  summarize(tree_count = n()) # n() counts how many rows there are in the data frame
+
+### Method 2: different way, plus a few new funcitons
+top_five_status <- sf_trees %>%
+  count(legal_status) %>%
+  drop_na(legal_status) %>% # will drop any row with an 'NA' in it in the legal_status column 
+  rename(tree_count = n) %>% 
+  relocate(tree_count) %>% # relocates tree_count to the front of the columns
+  slice_max(tree_count, n = 5) %>% # takes only maximum up to 5
+  arrange(desc(tree_count)) # arrange by tree_count in descending order
+
+```
+
+### Make a graph of the top 5 from above:
+
+```{r}
+ggplot(data = top_five_status, aes(x = fct_reorder(legal_status, tree_count), y = tree_count)) +
+         geom_col(fill = 'darkgreen') +
+  labs(x = 'Legal Status',
+       y = 'Tree Count') +
+  coord_flip() +
+  theme_minimal()
+       
+# use 'fct_reorder() to reoder 'legal_status' by 'tree_count' and order by factor (from smallest to largest) ** Note: you can use '-' infront of 'tree_count' to switch order to go from highest to lowest 
+```
+
+**Example 2** Only going to keep observations where legal status is "Permitted Site" and caretaker is "MTA", and store as `permitted_data_df`
+
+shift-cmd-c to commen/uncomment quickly
+```{r}
+# sf_trees$legal_status %>% unique() # takes legal status column and gets rid of duplicates to see what the unique values are
+# unique(sf_trees$caretaker)
+
+permitted_data_df <- sf_trees %>%
+  filter(legal_status == 'Permitted Site', caretaker == 'MTA') 
+
+# Note: '|' between 'Permitted Site' and 'caretaker' means 'or', so if legal status is 'Permitted Site' OR caretaker is 'MTA', or both then it should appear in the data table. EX) filter(legal_status == 'Permitted Site' | caretaker == 'MTA') 
+
+#Note: if you want to filter for multiple legal statuses use %in% and `c()` EX) filter(legal_status %in% c('Permitted Site', 'Private'), caretaker == 'MTA')
+```
+
+**Example 3:** Only keep Blackwood Acacia trees, and then only keep columns `legal status`, `date`, `latitude`, `longitude`, and store as `blackwood_acacia_df`
+
+```{r}
+blackwood_acacia_df <- sf_trees %>%
+  filter(str_detect(species, 'Blackwood Acacia')) %>% # in this column, keep any rows where you find 'Blackwood Acacia'
+  select(legal_status, date, lat = latitude, lon = longitude)
+
+### Make a little graph of locations
+
+ggplot(data = blackwood_acacia_df, aes(x = lon, y = lat)) + 
+  geom_point(color = 'darkgreen')
+```
+
+**Example 4** Use `tidyr::separate()` to separate one column into multiple columns
+
+```{r}
+sf_trees_sep <- sf_trees %>%
+  separate(species, into = c("species_scientific", "species_common"), sep = "::") # separate 'species' column into two columns at the '::'
+```
+
+**Example 5** use `tidyr::unite()` to combine columns
+
+```{r}
+ex_5 <- sf_trees %>%
+  unite('id_status', tree_id, legal_status, sep = '_CHECK_THIS_OUT')
+
+# Note: also drops the old columns and only retains the new column, 'id_status'
+```
+
+
+### Part 2: MAKE SOME MAPS!
+
+**Step 1** Convert lat/lon to spatial points, `st_as_sf()` this takes spatial temporal data and convert to sf object (a bunch of spatial points)
+
+```{r}
+blackwood_acacia_sf <- blackwood_acacia_df %>%
+  drop_na(lat, lon) %>%
+  st_as_sf(coords = c('lon', 'lat')) # R now knows that this is a spatial object (see geometry colun that has appeared!)
+
+### we need to tell R what the coordinate reference system is using `st_crs()`
+
+st_crs(blackwood_acacia_sf) <- 4326 # this is the epsg number for a reference system
+
+ggplot(data = blackwood_acacia_sf) + # dont put in any aesthetics because geom_sf already knows the aesthetics
+  geom_sf(color = 'darkgreen') +
+  theme_minimal()
+```
+
+### Read in the SF shapefile and add to map!
+
+```{r}
+sf_map <- read_sf(here('data', 'sf_map', 'tl_2017_06075_roads.shp'))
+
+sf_map_transform <- st_transform(sf_map, 4326) # need to make sure the reference is the same for this map as the blackwood_acacia_sf (4326)
+
+ggplot(data = sf_map_transform) +
+  geom_sf()
+
+```
+Combine the maps!!
+
+```{r}
+ggplot() +
+  geom_sf(data = sf_map,
+          size = 0.1,
+          color = 'darkgrey') +
+  geom_sf(data = blackwood_acacia_sf,
+          color = 'red',
+          size = 0.5) +
+  theme_void() +
+  labs(title = 'Blackwood acacias in SF')
+
+# Note: order in which geom_sf() appear is the order of the layers. So your bottom layer should be written first.
+```
+
+### Now an INTERACTIVE map!!
+
+```{r}
+tmap_mode('view') # sets up map to be interactive
+
+tm_shape(blackwood_acacia_sf) + # equivalent of ggplot()
+  tm_dots() # equivalent to geom_point()
+```
+
+
+
+
+
+
+
+
+
+
+
